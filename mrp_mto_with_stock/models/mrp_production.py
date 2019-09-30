@@ -62,8 +62,6 @@ class MrpProduction(models.Model):
         for move in self.move_raw_ids:
             if not self._mto_with_stock_condition(move):
                 continue
-            new_move = False
-            qty_to_procure = 0.0
             if not mto_with_no_move_dest_id:
                 # We have to split the move because we can't have
                 # a part of the move that have ancestors and not the
@@ -79,7 +77,8 @@ class MrpProduction(models.Model):
                     # we need to adjust the unit_factor of the stock moves
                     # to split correctly the load of each one.
                     ratio = qty_to_procure / move.product_uom_qty
-                    new_move = move.copy({
+                    # create new move for make to order part
+                    move.copy({
                         'product_uom_qty': qty_to_procure,
                         'procure_method': 'make_to_order',
                         'unit_factor': move.unit_factor * ratio,
@@ -89,20 +88,8 @@ class MrpProduction(models.Model):
                             move.product_uom_qty - qty_to_procure,
                         'unit_factor': move.unit_factor * (1 - ratio),
                     })
-                    move._action_confirm()
-                    move._action_assign()
-                elif float_compare(
-                        qty_to_procure, 0, precision_digits=precision) > 0:
-                    new_move = move
-                else:
-                    # If we don't need to procure, we reserve the qty
-                    # for this move so it won't be available for others,
-                    # which would generate planning issues.
-                    move._action_confirm()
-                    move._action_assign()
-            if new_move:
-                self.run_procurement(
-                    new_move, qty_to_procure, mto_with_no_move_dest_id)
+                move._action_confirm()
+                move._action_assign()
         return res
 
     @api.multi
@@ -132,15 +119,6 @@ class MrpProduction(models.Model):
             raise UserError('\n'.join(errors))
         return True
 
-    @api.model
-    def _get_incoming_qty_waiting_validation(self, move):
-        """
-        This method should be overriden in submodule to manage cases where
-        we need to add quantities to the forecast quantity. Like draft
-        purchase order, purchase request, etc...
-        """
-        return 0.0
-
     @api.multi
     def get_mto_qty_to_procure(self, move):
         self.ensure_one()
@@ -151,8 +129,6 @@ class MrpProduction(models.Model):
         virtual_available = move_location.product_id.virtual_available
         qty_available = move.product_id.uom_id._compute_quantity(
             virtual_available, move.product_uom)
-        draft_incoming_qty = self._get_incoming_qty_waiting_validation(move)
-        qty_available += draft_incoming_qty
         if float_compare(qty_available, 0, precision_digits=precision) >= 0:
             return 0.0
         else:
